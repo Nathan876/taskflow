@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package taskflow;
+
+import "google/protobuf/timestamp.proto";
+
+// ----- Modèle de données -----
+
+enum TaskStatus {
+  TODO = 0;
+  IN_PROGRESS = 1;
+  DONE = 2;
+}
+
+message Comment {
+  string author = 1;
+  string text = 2;
+  google.protobuf.Timestamp created_at = 3;
+}
+
+message Task {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  TaskStatus status = 4;
+  string assigned_to = 5;
+  string created_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+  repeated Comment comments = 8;
+}
+
+message CreateTaskRequest {
+  string title = 1;
+  string description = 2;
+  string assigned_to = 3;
+  string created_by = 4;
+}
+
+message CreateTaskResponse {
+  Task task = 1;
+}
+
+message GetTaskRequest {
+  string id = 1;
+}
+
+message ListTasksRequest {
+  optional TaskStatus status_filter = 1;  // absent = toutes les tâches
+  optional string assigned_filter = 2;    // absent = tous les assignés
+}
+
+message UpdateStatusRequest {
+  string id = 1;
+  TaskStatus new_status = 2;
+  string requested_by = 3;
+}
+
+message AssignTaskRequest {
+  string id = 1;
+  string new_assignee = 2;
+  string requested_by = 3;               // auteur de l'événement ASSIGNED
+}
+
+message AddCommentRequest {
+  string id = 1;
+  string author = 2;
+  string text = 3;
+}
+
+message DeleteTaskRequest {
+  string id = 1;
+  string requested_by = 2;               // seul le créateur peut supprimer
+}
+
+// Notification envoyée en streaming
+message TaskEvent {
+  string event_type = 1;   // "CREATED", "STATUS_CHANGED", "ASSIGNED",
+                           // "COMMENTED", "DELETED"
+  string task_id = 2;
+  string author = 3;       // qui a fait l'action
+  string message = 4;      // ex: "alice a passé 'Rapport' à DONE"
+}
+
+message SubscribeRequest {
+  string username = 1;
+  repeated string event_types = 2;   // vide = tous les événements
+}
+
+message Empty {}
+
+// Client streaming : recherche par mots-clés
+message SearchEntry {
+  string keyword = 1;
+}
+
+message SearchSummary {
+  message KeywordHit {                 // message imbriqué
+    string keyword = 1;
+    int32 match_count = 2;
+  }
+  int32 total_requests = 1;
+  repeated KeywordHit results = 2;
+}
+
+// ----- Service -----
+
+service TaskFlow {
+  // Unary
+  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  rpc GetTask(GetTaskRequest) returns (Task);
+  rpc UpdateStatus(UpdateStatusRequest) returns (Task);
+  rpc AssignTask(AssignTaskRequest) returns (Task);
+  rpc AddComment(AddCommentRequest) returns (Task);
+  rpc DeleteTask(DeleteTaskRequest) returns (Empty);
+
+  // Server streaming
+  rpc ListTasks(ListTasksRequest) returns (stream Task);
+  rpc Subscribe(SubscribeRequest) returns (stream TaskEvent);
+
+  // Client streaming
+  rpc SearchKeywords(stream SearchEntry) returns (SearchSummary);
+}
