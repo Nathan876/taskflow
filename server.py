@@ -6,7 +6,6 @@ import threading
 import time
 import uuid
 from concurrent import futures
-from google.protobuf import empty_pb2
 import grpc
 from google.protobuf.timestamp_pb2 import Timestamp
 from taskflow_pb2 import SearchSummary
@@ -83,6 +82,10 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
         with self._lock:
             tasks = list(self._tasks.values())
         for task in tasks:
+            if (request.HasField("status_filter") and task.get("status") != request.status_filter):
+                continue
+            if (request.HasField("assigned_filter") and task.get("assigned_to") != request.assigned_filter):
+                continue
             yield self._to_pb(task)
 
     # ---------- TODO(4) ----------
@@ -95,15 +98,17 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
     #     author = requested_by, message "alice a passé 'Rapport' à DONE"
     def UpdateStatus(self, request, context):
         task = self._get_or_abort(request.id, context)
-        if task["status"] == request.status:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"task already in status {_status_name(request.status)}")
+        if task["status"] == request.new_status:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT,
+                          f"task already in status {_status_name(request.new_status)}")
         if task["status"] == taskflow_pb2.DONE:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"cannot reopen a DONE task")
 
         with self._lock:
-            task["status"] = request.status
+            task["status"] = request.new_status
             self._tasks[task["id"]] = task
-            self._publish(event_type="STATUS_CHANGED", task_id=task["id"], author=request.requested_by, message=f"{request.requested_by} a passé '{task['title']}' à {_status_name(request.status)}")
+            self._publish(event_type="STATUS_CHANGED", task_id=task["id"], author=request.requested_by,
+                          message=f"{request.requested_by} a passé '{task['title']}' à {_status_name(request.new_status)}")
 
         return self._to_pb(task)
 
@@ -141,9 +146,9 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"comment required")
 
         with self._lock:
-            task["comments"].append( {"author": request.requested_by, "text": request.text, "created_at": _now()})
+            task["comments"].append( {"author": request.author, "text": request.text, "created_at": _now()})
             self._tasks[task["id"]] = task
-            self._publish(event_type="COMMENTED", task_id=task["id"], author=request.requested_by, message=f"{request.requested_by} a commenté la tâche {task['title']}")
+            self._publish(event_type="COMMENTED", task_id=task["id"], author=request.author, message=f"{request.author} a commenté la tâche {task['title']}")
         return self._to_pb(task)
 
     # ---------- TODO(7) ----------
@@ -158,7 +163,7 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
         with self._lock:
             del self._tasks[task["id"]]
             self._publish(event_type="DELETED", task_id=task["id"], author=request.requested_by, message=f"{request.requested_by} a supprimé la tâche '{task['title']}'")
-        return empty_pb2.Empty()
+        return taskflow_pb2.Empty()
 
     # ---------- TODO(8) ----------
     # Subscribe (server streaming infini) — découpé en DEUX méthodes :
