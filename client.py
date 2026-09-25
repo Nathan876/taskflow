@@ -1,7 +1,7 @@
 # client.py
 import argparse
 import threading
-from asyncio import timeout
+from async_timeout import timeout
 
 import grpc
 
