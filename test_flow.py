@@ -10,6 +10,7 @@ import grpc
 
 import taskflow_pb2 as pb
 import taskflow_pb2_grpc
+from interceptors import HeaderInterceptor
 
 PORT = 50061  # port dédié aux tests : ne gêne pas un serveur de démo déjà lancé
 
@@ -85,21 +86,54 @@ def run_tests(stub, log_path):
         if r.keyword.lower() in ("alpha", "beta"):
             assert r.match_count == 2
     # Un keyword vide dans le flux -> INVALID_ARGUMENT.
-
-    # --- TODO(24) : Subscribe ---
-    # Sur un channel séparé, s'abonner avec event_types=["DELETED"] ;
-    # lire le flux dans un threading.Thread qui pousse dans une queue.Queue.
-    # time.sleep(0.3) pour laisser l'abonnement s'établir, puis créer et
-    # supprimer une tâche : q.get(timeout=2) doit renvoyer un DELETED
-    # (le CREATED a été filtré). Fermez ensuite ce channel.
     expect_error(lambda: stub.SearchKeywords(iter([pb.SearchEntry(keyword="")]), timeout=3),
                  grpc.StatusCode.INVALID_ARGUMENT)
 
-    # --- TODO(25) : Étape 5 — metadata x-user ---
-    # Le stdout du serveur est écrit dans log_path. Vérifiez qu'il contient
-    # "user=testeur" (metadata ajouté par HeaderInterceptor) et une ligne
-    # avec code=NOT_FOUND (produite par LoggingInterceptor).
+    # --- TODO(24) : Subscribe ---
+    # Sur un channel séparé, s'abonner avec event_types=["DELETED"] ;[cite: 1]
+    # lire le flux dans un threading.Thread qui pousse dans une queue.Queue.[cite: 1]
+    # time.sleep(0.3) pour laisser l'abonnement s'établir, puis créer et[cite: 1]
+    # supprimer une tâche : q.get(timeout=2) doit renvoyer un DELETED[cite: 1]
+    # (le CREATED a été filtré). Fermez ensuite ce channel.[cite: 1]
 
+    sub_channel = grpc.insecure_channel(f"localhost:{PORT}")
+    sub_channel = grpc.intercept_channel(sub_channel, HeaderInterceptor("testeur"))
+    sub_stub = taskflow_pb2_grpc.TaskFlowStub(sub_channel)
+
+    q = queue.Queue()
+
+    def listen_thread():
+        try:
+            stream = sub_stub.Subscribe(pb.SubscribeRequest(username="testeur", event_types=["DELETED"]))
+            for ev in stream:
+                q.put(ev)
+        except grpc.RpcError:
+            pass
+
+    t_listen = threading.Thread(target=listen_thread, daemon=True)
+    t_listen.start()
+    time.sleep(0.3)
+
+    t3_res = stub.CreateTask(pb.CreateTaskRequest(title="TempDelete", created_by="alice"), timeout=3)
+    t3_id = t3_res.task.id
+    stub.DeleteTask(pb.DeleteTaskRequest(id=t3_id, requested_by="alice"), timeout=3)
+
+    try:
+        event_recu = q.get(timeout=2)
+        assert event_recu.event_type == "DELETED"
+        assert event_recu.task_id == t3_id
+    except queue.Empty:
+        raise AssertionError("Aucun événement DELETED reçu via le subscribe")
+    sub_channel.close()
+
+    # --- TODO(25) : Étape 5 — metadata x-user ---
+    # Le stdout du serveur est écrit dans log_path. Vérifiez qu'il contient[cite: 1]
+    # "user=testeur" (metadata ajouté par HeaderInterceptor) et une ligne[cite: 1]
+    # avec code=NOT_FOUND (produite par LoggingInterceptor).[cite: 1]
+    with open(log_path, "r", encoding="utf-8") as f:
+        logs = f.read()
+    assert "user=testeur" in logs
+    assert "code=NOT_FOUND" in logs
 
 
 def main():
@@ -109,7 +143,8 @@ def main():
     channel = grpc.insecure_channel(f"localhost:{PORT}")
     try:
         grpc.channel_ready_future(channel).result(timeout=10)  # attend le serveur
-        # Étape 5 : channel = grpc.intercept_channel(channel, HeaderInterceptor("testeur"))
+        # Étape 5 :
+        channel = grpc.intercept_channel(channel, HeaderInterceptor("testeur"))
         run_tests(taskflow_pb2_grpc.TaskFlowStub(channel), log.name)
         print("✅ Tous les tests passent.")
     finally:
