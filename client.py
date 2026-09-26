@@ -7,6 +7,7 @@ import grpc
 
 import taskflow_pb2
 import taskflow_pb2_grpc
+from interceptors import HeaderInterceptor
 
 STATUS_NAMES = {0: "TODO", 1: "IN_PROGRESS", 2: "DONE"}
 received_events = []  # pour l'option 9 (débug)
@@ -63,7 +64,7 @@ def main():
     args = parser.parse_args()
 
     channel = grpc.insecure_channel(f"{args.host}:{args.port}")
-    # Étape 5 : channel = grpc.intercept_channel(channel, HeaderInterceptor(args.user))
+    channel = grpc.intercept_channel(channel, HeaderInterceptor(args.user))
     stub = taskflow_pb2_grpc.TaskFlowStub(channel)
     T = args.timeout  # à passer en timeout=T sur TOUS les appels (sauf Subscribe)
 

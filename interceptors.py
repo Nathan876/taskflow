@@ -7,6 +7,14 @@ from urllib import request
 import grpc
 
 
+def _log_call(method, duration_ms, context, user):
+    hours = datetime.now().strftime("%H:%M:%S")
+    code = context.code()
+    code_str = code.name if code is not None else "OK"
+    print(f"[{hours}] {method}  duration={round(duration_ms)}ms  code={code_str}  user={user}",
+          flush=True)
+
+
 # ---------- TODO(22) ----------
 # LoggingInterceptor (serveur) : à chaque RPC, afficher
 #   [HH:MM:SS] METHOD  duration=XXms  code=XX  user=YY
@@ -35,69 +43,51 @@ class LoggingInterceptor(grpc.ServerInterceptor):
         if handler is None:
             return None
 
+        method = handler_call_details.method
+        user = dict(handler_call_details.invocation_metadata).get("x-user")
+
         if handler.unary_unary is not None:
             def wrapper(request, context):
                 start_time = time.perf_counter()
                 result = handler.unary_unary(request, context)
-                end_time = time.perf_counter()
-                duration_ms = (end_time - start_time) * 1000
-                username = dict(handler_call_details.invocation_metadata).get("x-user")
-                hours = datetime.now().strftime("%H:%M:%S")
-                method = handler_call_details.method
-                print(f"[{hours}] {method} duration={duration_ms}ms code= {context.code()} user={username}", flush=True)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                _log_call(method, duration_ms, context, user)
                 return result
 
-            return (
-                grpc.unary_unary_rpc_method_handler(wrapper, handler.request_deserializer, handler.response_serializer))
+            return grpc.unary_unary_rpc_method_handler(
+                wrapper, handler.request_deserializer, handler.response_serializer)
+
         elif handler.unary_stream is not None:
             def wrapper(request, context):
                 start_time = time.perf_counter()
                 yield from handler.unary_stream(request, context)
-                end_time = time.perf_counter()
-                duration_ms = (end_time - start_time) * 1000
-                username = dict(handler_call_details.invocation_metadata).get("x-user")
-                hours = datetime.now().strftime("%H:%M:%S")
-                method = handler_call_details.method
-                print(f"[{hours}] {method} duration={duration_ms: .2f}ms code= {context.code()} user={username}",
-                      flush=True)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                _log_call(method, duration_ms, context, user)
 
             return grpc.unary_stream_rpc_method_handler(
-                wrapper,
-                handler.request_deserializer,
-                handler.response_serializer
-            )
+                wrapper, handler.request_deserializer, handler.response_serializer)
+
         elif handler.stream_unary is not None:
             def wrapper(request, context):
                 start_time = time.perf_counter()
                 result = handler.stream_unary(request, context)
-                end_time = time.perf_counter()
-                duration_ms = (end_time - start_time) * 1000
-                username = dict(handler_call_details.invocation_metadata).get("x-user", "Unknown")
-                hours = datetime.now().strftime("%H:%M:%S")
-                method = handler_call_details.method
-                print(f"[{hours}] {method} duration={duration_ms:.2f}ms code={context.code() or 'OK'} user={username}",
-                      flush=True)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                _log_call(method, duration_ms, context, user)
                 return result
 
-            return grpc.stream_unary_rpc_method_handler(wrapper, handler.request_deserializer,
-                                                        handler.response_serializer)
+            return grpc.stream_unary_rpc_method_handler(
+                wrapper, handler.request_deserializer, handler.response_serializer)
+
         elif handler.stream_stream is not None:
             def wrapper(request, context):
                 start_time = time.perf_counter()
                 yield from handler.stream_stream(request, context)
-                end_time = time.perf_counter()
-                duration_ms = (end_time - start_time) * 1000
-                username = dict(handler_call_details.invocation_metadata).get("x-user")
-                hours = datetime.now().strftime("%H:%M:%S")
-                method = handler_call_details.method
-                print(f"[{hours}] {method} duration={duration_ms: .2f}ms code= {context.code()} user={username}",
-                      flush=True)
+                duration_ms = (time.perf_counter() - start_time) * 1000
+                _log_call(method, duration_ms, context, user)
 
             return grpc.stream_stream_rpc_method_handler(
-                wrapper,
-                handler.request_deserializer,
-                handler.response_serializer
-            )
+                wrapper, handler.request_deserializer, handler.response_serializer)
+
         return handler
 
 
