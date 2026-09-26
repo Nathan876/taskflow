@@ -8,6 +8,8 @@ import uuid
 from concurrent import futures
 import grpc
 from google.protobuf.timestamp_pb2 import Timestamp
+
+from interceptors import LoggingInterceptor
 from taskflow_pb2 import SearchSummary
 import taskflow_pb2
 import taskflow_pb2_grpc
@@ -22,7 +24,7 @@ def _now() -> Timestamp:
 
 
 def _status_name(value: int) -> str:
-    return taskflow_pb2.TaskStatus.Name(value)   # 2 -> "DONE"
+    return taskflow_pb2.TaskStatus.Name(value)  # 2 -> "DONE"
 
 
 class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
@@ -33,9 +35,9 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
         self._tasks = {}
         self._lock = threading.RLock()
         # une queue d'événements par abonné
-        self._subscribers = []          # liste de (username, event_types, Queue)
+        self._subscribers = []  # liste de (username, event_types, Queue)
         self._subs_lock = threading.Lock()
-        self._slow = slow               # bonus B1
+        self._slow = slow  # bonus B1
 
     # ---------- TODO(1) ----------
     # CreateTask :
@@ -51,18 +53,19 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
         if request.created_by == "":
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"created_by required")
         task_id = str(uuid.uuid4())
-        new_task = {"status" : taskflow_pb2.TODO,
+        new_task = {"status": taskflow_pb2.TODO,
                     "title": request.title,
                     "created_by": request.created_by,
                     "id": task_id,
-                    "description" : request.description,
-                    "assigned_to" : request.assigned_to,
-                    "created_at" : _now(),
-                    "comments" : []}
+                    "description": request.description,
+                    "assigned_to": request.assigned_to,
+                    "created_at": _now(),
+                    "comments": []}
         with self._lock:
             self._tasks[task_id] = new_task
 
-            self._publish(event_type="CREATED", task_id=task_id, author=request.created_by, message=f"Nouvelle tâche : {request.title}")
+            self._publish(event_type="CREATED", task_id=task_id, author=request.created_by,
+                          message=f"Nouvelle tâche : {request.title}")
 
         return taskflow_pb2.CreateTaskResponse(task=self._to_pb(new_task))
 
@@ -112,7 +115,6 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
 
         return self._to_pb(task)
 
-
     # ---------- TODO(5) ----------
     # AssignTask : new_assignee vide -> INVALID_ARGUMENT ;
     # id inconnu -> NOT_FOUND ;
@@ -133,8 +135,6 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
                           message=f"{request.requested_by} a assigné '{task['title']}' à {request.new_assignee}")
         return self._to_pb(task)
 
-
-
     # ---------- TODO(6) ----------
     # AddComment : texte vide -> INVALID_ARGUMENT ;
     # id inconnu -> NOT_FOUND. Ajoutez un dict {author, text, created_at}
@@ -146,9 +146,10 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"comment required")
 
         with self._lock:
-            task["comments"].append( {"author": request.author, "text": request.text, "created_at": _now()})
+            task["comments"].append({"author": request.author, "text": request.text, "created_at": _now()})
             self._tasks[task["id"]] = task
-            self._publish(event_type="COMMENTED", task_id=task["id"], author=request.author, message=f"{request.author} a commenté la tâche {task['title']}")
+            self._publish(event_type="COMMENTED", task_id=task["id"], author=request.author,
+                          message=f"{request.author} a commenté la tâche {task['title']}")
         return self._to_pb(task)
 
     # ---------- TODO(7) ----------
@@ -162,7 +163,8 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
 
         with self._lock:
             del self._tasks[task["id"]]
-            self._publish(event_type="DELETED", task_id=task["id"], author=request.requested_by, message=f"{request.requested_by} a supprimé la tâche '{task['title']}'")
+            self._publish(event_type="DELETED", task_id=task["id"], author=request.requested_by,
+                          message=f"{request.requested_by} a supprimé la tâche '{task['title']}'")
         return taskflow_pb2.Empty()
 
     # ---------- TODO(8) ----------
@@ -208,7 +210,6 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
             with self._subs_lock:
                 self._subscribers.remove(entry)
 
-
     # ---------- TODO(9) ----------
     # SearchKeywords (client streaming) :
     #   - itérer sur les requêtes entrantes (for entry in request_iterator)
@@ -229,13 +230,13 @@ class TaskFlowService(taskflow_pb2_grpc.TaskFlowServicer):
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"empty keyword")
 
             for task in self._tasks.values():
-                if entry.keyword.lower() in task["title"].lower() or entry.keyword.lower() in task["description"].lower():
+                if entry.keyword.lower() in task["title"].lower() or entry.keyword.lower() in task[
+                    "description"].lower():
                     match_count += 1
 
             hits.append(SearchSummary.KeywordHit(keyword=entry.keyword, match_count=match_count))
 
-
-        return SearchSummary(total_requests= total_requests, results=hits)
+        return SearchSummary(total_requests=total_requests, results=hits)
 
     # ----- Utilitaires fournis -----
     def _get_or_abort(self, task_id: str, context) -> dict:
@@ -273,7 +274,10 @@ def serve():
     # Chaque RPC en cours occupe un thread du pool ; un abonné Subscribe
     # en occupe un EN PERMANENCE -> prévoir large.
     # Étape 5 : ajouter interceptors=[LoggingInterceptor()]
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=32))
+    server = grpc.server(futures.ThreadPoolExecutor(
+        max_workers=32),
+        interceptors=[LoggingInterceptor()]
+    )
     taskflow_pb2_grpc.add_TaskFlowServicer_to_server(TaskFlowService(args.slow), server)
     server.add_insecure_port(f"[::]:{args.port}")
     server.start()

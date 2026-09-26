@@ -34,6 +34,7 @@ class LoggingInterceptor(grpc.ServerInterceptor):
         handler = continuation(handler_call_details)
         if handler is None:
             return None
+
         if handler.unary_unary is not None:
             def wrapper(request, context):
                 start_time = time.perf_counter()
@@ -45,7 +46,9 @@ class LoggingInterceptor(grpc.ServerInterceptor):
                 method = handler_call_details.method
                 print(f"[{hours}] {method} duration={duration_ms}ms code= {context.code()} user={username}", flush=True)
                 return result
-            return (grpc.unary_unary_rpc_method_handler(wrapper, handler.request_deserializer, handler.response_serializer))
+
+            return (
+                grpc.unary_unary_rpc_method_handler(wrapper, handler.request_deserializer, handler.response_serializer))
         elif handler.unary_stream is not None:
             def wrapper(request, context):
                 start_time = time.perf_counter()
@@ -55,7 +58,9 @@ class LoggingInterceptor(grpc.ServerInterceptor):
                 username = dict(handler_call_details.invocation_metadata).get("x-user")
                 hours = datetime.now().strftime("%H:%M:%S")
                 method = handler_call_details.method
-                print(f"[{hours}] {method} duration={duration_ms: .2f}ms code= {context.code()} user={username}", flush=True)
+                print(f"[{hours}] {method} duration={duration_ms: .2f}ms code= {context.code()} user={username}",
+                      flush=True)
+
             return grpc.unary_stream_rpc_method_handler(
                 wrapper,
                 handler.request_deserializer,
@@ -74,7 +79,8 @@ class LoggingInterceptor(grpc.ServerInterceptor):
                       flush=True)
                 return result
 
-            return grpc.stream_unary_rpc_method_handler(wrapper, handler.request_deserializer,handler.response_serializer)
+            return grpc.stream_unary_rpc_method_handler(wrapper, handler.request_deserializer,
+                                                        handler.response_serializer)
         elif handler.stream_stream is not None:
             def wrapper(request, context):
                 start_time = time.perf_counter()
@@ -103,11 +109,11 @@ class LoggingInterceptor(grpc.ServerInterceptor):
 # ci-dessous pour construire des détails modifiés, puis
 #   return continuation(nouveaux_details, request)
 class _ClientCallDetails(
-        collections.namedtuple(
-            "_ClientCallDetails",
-            ("method", "timeout", "metadata", "credentials",
-             "wait_for_ready", "compression")),
-        grpc.ClientCallDetails):
+    collections.namedtuple(
+        "_ClientCallDetails",
+        ("method", "timeout", "metadata", "credentials",
+         "wait_for_ready", "compression")),
+    grpc.ClientCallDetails):
     pass
 
 
@@ -118,14 +124,26 @@ class HeaderInterceptor(grpc.UnaryUnaryClientInterceptor,
     def __init__(self, user: str):
         self._user = user
 
+    def _inject(self, details):
+        metadata = list(details.metadata) if details.metadata else []
+        metadata.append(("x-user", self._user))
+        return _ClientCallDetails(
+            method=details.method,
+            timeout=details.timeout,
+            metadata=metadata,
+            credentials=details.credentials,
+            wait_for_ready=getattr(details, "wait_for_ready", None),
+            compression=getattr(details, "compression", None),
+        )
+
     def intercept_unary_unary(self, continuation, details, request):
-        raise NotImplementedError()
+        return continuation(self._inject(details), request)
 
     def intercept_unary_stream(self, continuation, details, request):
-        raise NotImplementedError()
+        return continuation(self._inject(details), request)
 
     def intercept_stream_unary(self, continuation, details, request_iterator):
-        raise NotImplementedError()
+        return continuation(self._inject(details), request_iterator)
 
     def intercept_stream_stream(self, continuation, details, request_iterator):
-        raise NotImplementedError()
+        return continuation(self._inject(details), request_iterator)
